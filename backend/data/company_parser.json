@@ -1,0 +1,23 @@
+{
+    "RBC": {
+        "listing_page": {
+            "job_links": {
+                "selector": "a",
+                "href_contains": "/job/"
+            }
+        },
+        "job_page": {
+            "fields": {
+                "title": [
+                    "h1",
+                    ".job-title"
+                ],
+                "description": [
+                    ".job-description",
+                    "[data-testid='job-description']",
+                    "main"
+                ]
+            }
+        }
+    }
+}
