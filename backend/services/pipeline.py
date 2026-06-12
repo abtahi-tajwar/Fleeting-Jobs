@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from config import CAREER_PAGES_PATH, COMPANY_PARSER_PATH, JOB_CATEGORIES_PATH
+from sqlalchemy.orm import Session
+
+from config import JOB_CATEGORIES_PATH
+from database import SessionLocal
 from models import CompanyJobs, JobDetails, JobListing, ScanProgress, ScanResult
+from repositories.companies import list_companies_with_parsers
 from services.llm import LLMService
-from services.parser import get_company_parser, load_company_parsers, parse_job_listing_page, parse_job_page
-from services.scraper import (
-    BrowserScraper,
-    load_career_pages,
-    load_job_categories,
-)
+from services.parser import build_parser_config, parse_job_listing_page, parse_job_page
+from services.scraper import BrowserScraper, load_job_categories
 
 
 class JobScanPipeline:
@@ -36,26 +36,42 @@ class JobScanPipeline:
             total=total,
         )
 
+    def _load_scan_targets(self, db: Session):
+        companies = list_companies_with_parsers(db)
+        if not companies:
+            raise ValueError(
+                "No companies with parsers configured. Add a company and parser from the UI first."
+            )
+        return companies
+
     async def run(self) -> ScanResult:
         self.llm = LLMService()
-
-        career_pages = load_career_pages(CAREER_PAGES_PATH)
         categories = load_job_categories(JOB_CATEGORIES_PATH)
-        parsers = load_company_parsers(COMPANY_PARSER_PATH)
+
+        db = SessionLocal()
+        try:
+            scan_targets = self._load_scan_targets(db)
+        finally:
+            db.close()
 
         companies: List[CompanyJobs] = []
         detailed_jobs: List[JobDetails] = []
 
-        total_steps = len(career_pages)
+        total_steps = len(scan_targets)
         self._set_progress("running", "Starting scan", 0, total_steps)
 
         await self.scraper.start()
         try:
-            matched_jobs: List[Tuple[CompanyJobs, JobListing]] = []
+            matched_jobs: List[Tuple[CompanyJobs, JobListing, dict]] = []
 
-            for index, page in enumerate(career_pages, start=1):
-                url = page["url"]
-                company_name = page.get("name") or "Unknown Company"
+            for index, company_row in enumerate(scan_targets, start=1):
+                company_name = company_row.name
+                url = company_row.listing_url
+                parser_config = build_parser_config(
+                    company_row.parser.listing_page,
+                    company_row.parser.company_page,
+                )
+
                 self._set_progress(
                     "running",
                     f"Parsing job listings: {company_name}",
@@ -64,7 +80,6 @@ class JobScanPipeline:
                 )
 
                 try:
-                    parser_config = get_company_parser(parsers, company_name)
                     html = await self.scraper.scrape_career_page_html(url)
                     raw_jobs = parse_job_listing_page(html, parser_config, url)
 
@@ -81,7 +96,7 @@ class JobScanPipeline:
                     companies.append(company)
 
                     for job in company.jobs:
-                        matched_jobs.append((company, job))
+                        matched_jobs.append((company, job, parser_config))
                 except Exception as exc:
                     companies.append(
                         CompanyJobs(
@@ -94,7 +109,7 @@ class JobScanPipeline:
             job_total = len(matched_jobs)
             self._set_progress("running", "Scraping matched job descriptions", 0, job_total)
 
-            for job_index, (company, job) in enumerate(matched_jobs, start=1):
+            for job_index, (company, job, parser_config) in enumerate(matched_jobs, start=1):
                 self._set_progress(
                     "running",
                     f"Analyzing job: {job.title}",
@@ -102,7 +117,6 @@ class JobScanPipeline:
                     job_total,
                 )
                 try:
-                    parser_config = get_company_parser(parsers, company.company_name)
                     html = await self.scraper.scrape_job_page_html(job.url)
                     parsed = parse_job_page(html, parser_config)
 

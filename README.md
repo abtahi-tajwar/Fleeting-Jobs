@@ -1,34 +1,35 @@
 # Fleeting Jobs
 
-A full-stack app that scrapes company career pages, uses OpenAI to identify relevant job postings, and extracts structured requirements from each listing.
+A full-stack app that scrapes company career pages, uses CSS parsers stored in PostgreSQL, filters jobs with AI, and extracts structured requirements from each listing.
 
 ## Stack
 
 - **Frontend:** Next.js 15 (React 19)
 - **Backend:** Python (FastAPI)
+- **Database:** PostgreSQL (Docker)
 - **Scraping:** Playwright (headless Chromium)
 - **LLM:** OpenAI ChatGPT API (`gpt-4o-mini` by default)
 
 ## How it works
 
-1. Reads career page URLs from `backend/data/career_pages.json`
-2. Reads per-company HTML parsers from `backend/data/company_parser.json`
-3. Reads target job categories from `backend/data/job_categories.json`
-4. Uses Playwright to scrape each career page HTML
-5. Parses job listings with CSS selectors defined in `company_parser.json`
-6. Filters jobs against your categories using ChatGPT
-7. Scrapes each matched job page and parses the description with CSS selectors
-8. Uses ChatGPT on the description to extract:
-   - Job title
-   - Required tech skills
-   - Required soft skills
-   - Location
-   - Experience / background required
-9. Displays results in the Next.js UI with links to original postings
+1. Add companies and parsers from the UI (stored in PostgreSQL)
+2. Reads target job categories from `backend/data/job_categories.json`
+3. Uses Playwright to scrape each company's listing URL
+4. Parses job listings with company-specific CSS selectors from the database
+5. Filters jobs against your categories using ChatGPT
+6. Scrapes each matched job page and parses the description with CSS selectors
+7. Uses ChatGPT on the description to extract title, skills, location, and experience
+8. Displays results in the Jobs page with links to original postings
 
 ## Setup
 
-### 1. Backend
+### 1. Start PostgreSQL
+
+```bash
+docker compose up -d
+```
+
+### 2. Backend
 
 ```bash
 cd backend
@@ -39,18 +40,18 @@ playwright install chromium
 cp .env.example .env
 ```
 
-Edit `backend/.env` and set your OpenAI API key:
+Edit `backend/.env` and set your OpenAI API key and database URL:
 
 ```
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
+DATABASE_URL=postgresql://fleeting:fleeting@localhost:5432/fleeting_jobs
 ```
 
-Replace the sample JSON files with your own:
+Optional: seed sample RBC data:
 
-- `backend/data/career_pages.json`
-- `backend/data/company_parser.json`
-- `backend/data/job_categories.json`
+```bash
+python scripts/seed.py
+```
 
 Start the API:
 
@@ -58,7 +59,9 @@ Start the API:
 uvicorn main:app --reload --port 8000
 ```
 
-### 2. Frontend
+Tables are created automatically on startup.
+
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -69,49 +72,55 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## JSON file formats
+## UI
 
-**career_pages.json**
+- **Top bar:** Fleeting Jobs brand + Scan jobs button
+- **Sidebar:** Jobs, Companies, Parsers
+- **Companies:** Add company name, listing URL, single post URL format
+- **Parsers:** Select a company, paste listing page JSON and company page JSON
+
+## Database schema
+
+**companies**
+
+| Column | Description |
+|--------|-------------|
+| id | Primary key |
+| name | Company name |
+| slug | URL-friendly slug |
+| listing_url | Career listing page URL |
+| single_post_url_format | Job post URL pattern |
+
+**company_parsers**
+
+| Column | Description |
+|--------|-------------|
+| id | Primary key |
+| company_id | FK to companies |
+| listing_page | JSON selector config for listing page |
+| company_page | JSON selector config for job page |
+
+## Parser JSON formats
+
+**Listing page** (stored in `listing_page` column):
 
 ```json
 {
-  "career_pages": [
-    { "name": "RBC", "url": "https://jobs.rbc.com/ca/en/c/technology-analytics-research-jobs" }
-  ]
-}
-```
-
-The `name` must match a key in `company_parser.json`.
-
-**company_parser.json**
-
-```json
-{
-  "RBC": {
-    "listing_page": {
-      "job_links": {
-        "selector": "a",
-        "href_contains": "/job/"
-      }
-    },
-    "job_page": {
-      "fields": {
-        "title": ["h1", ".job-title"],
-        "description": [".job-description", "main"]
-      }
-    }
+  "job_links": {
+    "selector": "a",
+    "href_contains": "/job/"
   }
 }
 ```
 
-**job_categories.json**
+**Company page** (stored in `company_page` column):
 
 ```json
 {
-  "categories": [
-    "Software Engineering",
-    "Machine Learning / AI"
-  ]
+  "fields": {
+    "title": ["h1", ".job-title"],
+    "description": [".job-description", "main"]
+  }
 }
 ```
 
@@ -120,12 +129,16 @@ The `name` must match a key in `company_parser.json`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
-| GET | `/api/config` | Loaded career pages and categories |
+| GET | `/api/config` | Categories and counts |
+| GET | `/api/companies` | List companies |
+| POST | `/api/companies` | Create company |
+| GET | `/api/parsers` | List parsers |
+| POST | `/api/parsers` | Create parser |
 | POST | `/api/scan` | Run full scrape + LLM pipeline |
 | GET | `/api/results` | Last scan results |
 
 ## Notes
 
-- A full scan can take several minutes depending on the number of career pages and matched jobs (each page requires browser navigation + LLM calls).
-- Replace the sample URLs in `career_pages.json` with your target companies before running.
-- Ensure `OPENAI_API_KEY` is set; the scan will fail without it.
+- Companies and parsers are managed from the UI and stored in PostgreSQL.
+- A scan requires at least one company with a parser configured.
+- Ensure Docker Postgres is running and `OPENAI_API_KEY` is set before scanning.

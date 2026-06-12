@@ -1,29 +1,16 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 
-def load_company_parsers(path: Path) -> Dict[str, dict]:
-    with path.open(encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        raise ValueError("company_parser.json must be an object keyed by company name")
-    return data
-
-
-def get_company_parser(parsers: Dict[str, dict], company_name: str) -> dict:
-    if company_name not in parsers:
-        available = ", ".join(sorted(parsers.keys())) or "(none)"
-        raise ValueError(
-            f"No parser configured for company '{company_name}'. "
-            f"Available parsers: {available}"
-        )
-    return parsers[company_name]
+def build_parser_config(listing_page: dict, company_page: dict) -> dict:
+    return {
+        "listing_page": listing_page,
+        "job_page": company_page,
+    }
 
 
 def parse_job_listing_page(html: str, config: dict, base_url: str) -> List[dict]:

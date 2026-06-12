@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     cors_origins: str = "http://localhost:3000"
+    database_url: str = "postgresql://fleeting:fleeting@localhost:5432/fleeting_jobs"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -23,8 +24,6 @@ class Settings(BaseSettings):
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-CAREER_PAGES_PATH = DATA_DIR / "career_pages.json"
 JOB_CATEGORIES_PATH = DATA_DIR / "job_categories.json"
-COMPANY_PARSER_PATH = DATA_DIR / "company_parser.json"
 
 settings = Settings()

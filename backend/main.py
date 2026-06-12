@@ -2,26 +2,30 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from config import CAREER_PAGES_PATH, COMPANY_PARSER_PATH, JOB_CATEGORIES_PATH, settings
+from config import JOB_CATEGORIES_PATH, settings
+from database import get_db, init_db
 from models import ScanResult
+from repositories.companies import list_companies, list_parsers
+from routers.companies import parser_router, router as companies_router
+from schemas import AppConfigResponse
 from services.pipeline import JobScanPipeline
-from services.parser import load_company_parsers
-from services.scraper import load_career_pages, load_job_categories
+from services.scraper import load_job_categories
 
 
 pipeline = JobScanPipeline()
 scan_lock = asyncio.Lock()
-scan_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    init_db()
     yield
 
 
@@ -35,29 +39,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(companies_router)
+app.include_router(parser_router)
+
 
 @app.get("/api/health")
-async def health():
+async def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        db_connected = True
+    except Exception:
+        db_connected = False
+
     return {
         "status": "ok",
         "openai_configured": bool(settings.openai_api_key),
+        "database_connected": db_connected,
     }
 
 
-@app.get("/api/config")
-async def get_config():
-    parsers = load_company_parsers(COMPANY_PARSER_PATH)
-    return {
-        "career_pages": load_career_pages(CAREER_PAGES_PATH),
-        "categories": load_job_categories(JOB_CATEGORIES_PATH),
-        "parsers": list(parsers.keys()),
-    }
+@app.get("/api/config", response_model=AppConfigResponse)
+async def get_config(db: Session = Depends(get_db)):
+    companies = list_companies(db)
+    parsers = list_parsers(db)
+    return AppConfigResponse(
+        categories=load_job_categories(JOB_CATEGORIES_PATH),
+        company_count=len(companies),
+        parser_count=len(parsers),
+    )
 
 
 @app.get("/api/scan/status")
 async def scan_status():
-    global scan_task
-    running = scan_task is not None and not scan_task.done()
+    running = scan_lock.locked()
     result = pipeline.last_result
     return {
         "running": running,
@@ -66,14 +80,8 @@ async def scan_status():
     }
 
 
-async def _run_scan() -> ScanResult:
-    return await pipeline.run()
-
-
 @app.post("/api/scan", response_model=ScanResult)
 async def start_scan():
-    global scan_task
-
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=400,
@@ -85,7 +93,7 @@ async def start_scan():
 
     async with scan_lock:
         try:
-            return await _run_scan()
+            return await pipeline.run()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
