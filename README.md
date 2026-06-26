@@ -1,67 +1,52 @@
 # Fleeting Jobs
 
-A full-stack app that scrapes company career pages, uses CSS parsers stored in PostgreSQL, filters jobs with AI, and extracts structured requirements from each listing.
+A full-stack app that scrapes company career pages, parses listings with CSS selectors stored in PostgreSQL, filters jobs with AI, and extracts structured requirements from each listing.
 
-## Stack
+## Architecture
 
-- **Frontend:** Next.js 15 (React 19)
-- **Backend:** Python (FastAPI)
-- **Database:** PostgreSQL (Docker)
-- **Scraping:** Playwright (headless Chromium)
-- **LLM:** OpenAI ChatGPT API (`gpt-4o-mini` by default)
+| Layer | Stack | Port |
+|-------|-------|------|
+| Frontend | Next.js | 3000 |
+| Backend API | Java Spring Boot | 8000 |
+| Worker | Python (Playwright + OpenAI) | 8001 |
+| Database | PostgreSQL (Docker) | 5432 |
 
-## How it works
-
-1. Add companies and parsers from the UI (stored in PostgreSQL)
-2. Reads target job categories from `backend/data/job_categories.json`
-3. Uses Playwright to scrape each company's listing URL
-4. Parses job listings with company-specific CSS selectors from the database
-5. Filters jobs against your categories using ChatGPT
-6. Scrapes each matched job page and parses the description with CSS selectors
-7. Uses ChatGPT on the description to extract title, skills, location, and experience
-8. Displays results in the Jobs page with links to original postings
+Spring Boot owns the REST API, database, and scan orchestration. The Python **worker** handles headless browser scraping, HTML parsing, and LLM calls.
 
 ## Setup
 
-### 1. Start PostgreSQL
+### 1. PostgreSQL
 
 ```bash
 docker compose up -d
 ```
 
-### 2. Backend
+### 2. Python worker
+
+```bash
+cd worker
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+cp .env.example .env   # set OPENAI_API_KEY
+uvicorn main:app --reload --port 8001
+```
+
+### 3. Spring Boot backend
+
+Requires Java 17+ and Maven.
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env
+mvn spring-boot:run
 ```
 
-Edit `backend/.env` and set your OpenAI API key and database URL:
+API runs at [http://localhost:8000](http://localhost:8000).
 
-```
-OPENAI_API_KEY=sk-...
-DATABASE_URL=postgresql://fleeting:fleeting@localhost:5432/fleeting_jobs
-```
+On first startup, sample RBC company + parser data is seeded if the database is empty.
 
-Optional: seed sample RBC data:
-
-```bash
-python scripts/seed.py
-```
-
-Start the API:
-
-```bash
-uvicorn main:app --reload --port 8000
-```
-
-Tables are created automatically on startup.
-
-### 3. Frontend
+### 4. Frontend
 
 ```bash
 cd frontend
@@ -74,71 +59,53 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## UI
 
-- **Top bar:** Fleeting Jobs brand + Scan jobs button
+- **Top bar:** Fleeting Jobs + Scan jobs
 - **Sidebar:** Jobs, Companies, Parsers
 - **Companies:** Add company name, listing URL, single post URL format
-- **Parsers:** Select a company, paste listing page JSON and company page JSON
+- **Parsers:** Select company, paste listing page JSON + company page JSON
 
-## Database schema
+## Worker endpoints (internal)
 
-**companies**
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/scrape` | Headless browser HTML fetch |
+| POST | `/parse/listing` | CSS parser for job links |
+| POST | `/parse/job` | CSS parser for job description |
+| POST | `/llm/filter-jobs` | Category matching |
+| POST | `/llm/extract-details` | Extract skills, location, experience |
 
-| Column | Description |
-|--------|-------------|
-| id | Primary key |
-| name | Company name |
-| slug | URL-friendly slug |
-| listing_url | Career listing page URL |
-| single_post_url_format | Job post URL pattern |
-
-**company_parsers**
-
-| Column | Description |
-|--------|-------------|
-| id | Primary key |
-| company_id | FK to companies |
-| listing_page | JSON selector config for listing page |
-| company_page | JSON selector config for job page |
-
-## Parser JSON formats
-
-**Listing page** (stored in `listing_page` column):
-
-```json
-{
-  "job_links": {
-    "selector": "a",
-    "href_contains": "/job/"
-  }
-}
-```
-
-**Company page** (stored in `company_page` column):
-
-```json
-{
-  "fields": {
-    "title": ["h1", ".job-title"],
-    "description": [".job-description", "main"]
-  }
-}
-```
-
-## API endpoints
+## Public API (Spring Boot)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 | GET | `/api/config` | Categories and counts |
-| GET | `/api/companies` | List companies |
-| POST | `/api/companies` | Create company |
-| GET | `/api/parsers` | List parsers |
-| POST | `/api/parsers` | Create parser |
-| POST | `/api/scan` | Run full scrape + LLM pipeline |
+| GET/POST | `/api/companies` | Manage companies |
+| GET/POST | `/api/parsers` | Manage parsers |
+| POST | `/api/scan` | Run scan (calls worker) |
 | GET | `/api/results` | Last scan results |
+
+## Configuration
+
+**backend/src/main/resources/application.yml**
+
+```yaml
+worker:
+  base-url: http://localhost:8001
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/fleeting_jobs
+```
+
+**worker/.env**
+
+```
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+```
 
 ## Notes
 
-- Companies and parsers are managed from the UI and stored in PostgreSQL.
-- A scan requires at least one company with a parser configured.
-- Ensure Docker Postgres is running and `OPENAI_API_KEY` is set before scanning.
+- Start Postgres, the Python worker, and Spring Boot before scanning.
+- `OPENAI_API_KEY` lives in `worker/.env`, not in the Java backend.
+- Job categories are loaded from `backend/src/main/resources/data/job_categories.json`.

@@ -13,7 +13,8 @@ def build_parser_config(listing_page: dict, company_page: dict) -> dict:
     }
 
 
-def parse_job_listing_page(html: str, config: dict, base_url: str) -> List[dict]:
+def parse_job_listing_page(html: str, listing_page: dict, base_url: str) -> List[dict]:
+    config = {"listing_page": listing_page}
     soup = BeautifulSoup(html, "html.parser")
 
     job_links = config["listing_page"]["job_links"]
@@ -61,9 +62,9 @@ def extract_description(soup: BeautifulSoup, selectors: List[str]) -> str:
     return best_text
 
 
-def parse_job_page(html: str, config: dict) -> Dict[str, Any]:
+def parse_job_page(html: str, company_page: dict) -> Dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
-    fields = config["job_page"]["fields"]
+    fields = company_page["fields"]
 
     return {
         "title": extract_field(soup, fields["title"]),
